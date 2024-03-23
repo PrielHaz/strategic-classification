@@ -1,0 +1,248 @@
+## About Dataset
+
+The loan approval dataset is a collection of financial records and associated information used to determine the eligibility of individuals or organizations for obtaining loans from a lending institution. It includes various factors such as cibil score, income, employment status, loan term, loan amount, assets value, and loan status. This dataset is commonly used in machine learning and data analysis to develop models and algorithms that predict the likelihood of loan approval based on the given features.
+
+
+#### About columns (Information provided by the owner)
+
+- `loan_id`
+- `no_of_dependents`: The number of people financially dependent on the loan applicant.
+- `education`: Education of the Applicant (Graduate/Not Graduate)
+- `self_employed`: Employment Status of the Applicant
+- `income_annum`: Annual Income of the Applicant
+- `loan_amount`: The amount of loan requested.
+- `loan_term`: The duration for which the loan is taken, expressed in years.
+- `cibil_score`: Credit Score
+- `residential_assets_value`: (נכסי מגורים)
+- `commercial_assets_value`: real estate properties that are used for business activities. Unlike residential properties, which are used for living purposes, commercial properties are intended for commerce(מסחר).
+- `luxury_assets_value`: The value of luxury items (like cars, jewelry, etc.) owned by the applicant. For example: Office Buildings.
+- `bank_asset_value`: The total value of assets or money the applicant has in the bank.
+- `loan_status`: Loan Approval Status (Approved/Rejected)
+
+
+import pandas as pd
+import numpy as np
+from scipy import stats
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
+
+import matplotlib.pyplot as plt
+%matplotlib inline
+import seaborn as sns
+
+import scipy.stats as stats
+from statsmodels.formula.api import ols
+import statsmodels.api as sm
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import recall_score, precision_score, f1_score, accuracy_score
+import sklearn.metrics as metrics
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import RandomizedSearchCV
+from tabulate import tabulate
+
+import warnings
+
+warnings.filterwarnings("ignore")
+
+import os
+
+input_dir = "./kaggle/input"
+for dirname, _, filenames in os.walk(input_dir):
+    for filename in filenames:
+        print(os.path.join(dirname, filename))
+
+loan_original = pd.read_csv(
+    os.path.join(
+        input_dir, "loan-approval-prediction-dataset/loan_approval_dataset.csv"
+    )
+)
+# columns have weird spaces in names:
+loan_original.columns = loan_original.columns.str.replace(" ", "")
+loan_original[loan_original["loan_id"].duplicated(keep=False) == True].sort_values(
+    ["loan_id"]
+)
+# remove the loan_id column
+loan_ds = loan_original.drop(["loan_id"], axis=1)
+# replace all spaces in loan_status and education and self_employed columns to
+loan_ds["loan_status"] = loan_ds["loan_status"].str.replace(" ", "")
+loan_ds["education"] = loan_ds["education"].str.replace(" ", "")
+loan_ds["self_employed"] = loan_ds["self_employed"].str.replace(" ", "")
+
+
+GRADUATE_STRING = loan_ds["education"].unique()[0]
+NOT_GRADUATE_STRING = loan_ds["education"].unique()[1]
+
+# make education column binary
+loan_ds["education"] = loan_ds["education"].apply(
+    lambda x: 1 if x == GRADUATE_STRING else 0
+)
+
+APPROVED_STRING = loan_ds["loan_status"].unique()[0]
+REJECTED_STRING = loan_ds["loan_status"].unique()[1]
+
+# make loan_status column binary
+loan_ds["loan_status"] = loan_ds["loan_status"].apply(
+    lambda x: 1 if x == APPROVED_STRING else 0
+)
+
+YES_STRING = loan_ds["self_employed"].unique()[1]
+NO_STRING = loan_ds["self_employed"].unique()[0]
+
+# make self_employed column binary
+loan_ds["self_employed"] = loan_ds["self_employed"].apply(
+    lambda x: 1 if x == YES_STRING else 0
+)
+
+print(loan_ds.columns)
+
+print(
+    f"{GRADUATE_STRING=}, {NOT_GRADUATE_STRING=}, {APPROVED_STRING=}, {REJECTED_STRING=}, {YES_STRING=}, {NO_STRING=}"
+)
+
+loan_ds.head()
+
+loan_original.info()
+
+loan_original.describe(include="all")
+
+# corr and sns.heatmap
+corr = loan_ds.corr()
+plt.figure(figsize=(10, 6))
+
+sns.heatmap(corr, annot=True, cmap="coolwarm")
+plt.title("Correlation Matrix")
+plt.show()
+
+# plot the sns.pairplot(loan_ds)
+plt.figure(figsize=(20, 20))
+sns.pairplot(loan_ds)
+plt.show()
+
+We can see high correlation between luxury assets value and annual income,
+wich makes sense. People that have higher income tend to have more luxury assets
+like special cars etc.
+
+
+By the data cleaning scans, we have confirmed:
+
+1. There is no null value and duplicated value in this dataset.
+1. `no_of_dependents`, `education`, `self_employed` and `loan_status` are categorical columns.
+1. There are a total 4269 rows in this dataset, with 13 columns (features).
+1. There are 2656 data with an approved `loan_status`, which is about 62.2% compared to the "rejected" group. The dataset is slightly imbalanced but it is acceptable and we don't need to rebalance it.
+1. Other columns are numerical.
+
+
+loan_ds
+
+# no outliers?
+
+sns.boxplot(loan_ds["loan_amount"])
+plt.title("Loan Amount")
+plt.xlabel("Loan Amount")
+plt.show()
+
+sns.histplot(loan_ds, x="loan_amount", hue="loan_status")
+plt.title("Does loan status relate to the loan amount?")
+plt.xlabel("Loan Amount")
+plt.ylabel("Count")
+plt.show()
+
+We can see that loan amount does not affects the loan status.
+
+
+# show graph of annual income in x, loan status in red(Rejected) and green(accepted)
+# and y will be no_of_dependents
+plt.figure(figsize=(10, 10))
+sns.scatterplot(data=loan_ds, x="income_annum",
+                y="no_of_dependents", hue="loan_status")
+plt.title("Annual Income vs No of Dependents")
+plt.xlabel("Annual Income")
+plt.ylabel("No of Dependents")
+plt.show()
+
+We can see that num of dependents is not very affective in predicting load_status
+
+
+sns.scatterplot(
+    x=loan_ds["cibil_score"], y=loan_ds["income_annum"], hue=loan_ds["loan_status"]
+)
+plt.title("Loan Status, Annual Income, Credit Score")
+plt.xlabel("Credit Score")
+plt.ylabel("Loan Amount")
+plt.show()
+
+- We can see there is some threshold around 540. Let's train linear regression model to predict loan amount based on credit score and annual income to predict the status.
+
+
+# Let's threshold credit score on 540, all >= 540 will be accepted, all <540 will be rejected(create new pandas with thresh_pred and loan_status),
+# then print acc:
+def acc_for_column_threshold(
+    df,
+    feature_column,
+    threshold,
+    target_column,
+    target_value_below_thresh,
+    target_value_above_thresh,
+):
+    # create new df with thresholded column! new! not df
+    df_thresh = df.copy()
+    # remove all cols except feature_column and target_column
+    df_thresh = df_thresh[[feature_column, target_column]]
+    # create new column with thresholded values
+    df_thresh["thresh_pred"] = df_thresh[feature_column] >= threshold
+    # change True/False to target values
+    df_thresh["thresh_pred"] = df_thresh["thresh_pred"].replace(
+        {True: target_value_above_thresh, False: target_value_below_thresh}
+    )
+    # calculate accuracy
+    acc = accuracy_score(df_thresh[target_column], df_thresh["thresh_pred"])
+    return df_thresh, acc
+
+
+threshold = 540
+df_thresh, acc = acc_for_column_threshold(
+    loan_ds, "cibil_score", threshold, "loan_status", 0, 1
+)
+print(f"Accuracy for cibil_score threshold {threshold}: ", acc)
+df_thresh
+
+approved_num, rejected_num = loan_ds["loan_status"].value_counts()
+positive_precent = approved_num / (approved_num + rejected_num)
+print("Approved: ", approved_num)
+print("Rejected: ", rejected_num)
+print("Positive precent: ", positive_precent)
+
+Nice, we get 0.93 Accuracy using threshold only, even though the dataset
+is not imbalanced, it has 0.62% Approved loans.
+
+If the dataset was imbalanced, for example: 0.9 Approved, this thresholding
+was not impressive, as a stupid classifier that always say: Approve!
+would get 90% right.
+
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    matthews_corrcoef,
+    roc_auc_score,
+)
+from sklearn.model_selection import RandomizedSearchCV
+from tabulate import tabulate
+import numpy as np
+from metrics import (
+    calculate_metrics,
+    metrics_to_tabular_string,
+    find_best_threshold_for_mcc,
+)
+
+# train LogisticRegression on the dataset
+
