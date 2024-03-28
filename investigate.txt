@@ -23,7 +23,7 @@ The loan approval dataset is a collection of financial records and associated in
 import pandas as pd
 import numpy as np
 from scipy import stats
-
+import tqdm
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import MinMaxScaler
@@ -31,18 +31,39 @@ from sklearn.preprocessing import MinMaxScaler
 import matplotlib.pyplot as plt
 %matplotlib inline
 import seaborn as sns
-
+from typing import Tuple, Dict, Any, List, Union, Optional, Callable
 import scipy.stats as stats
 from statsmodels.formula.api import ols
 import statsmodels.api as sm
 
+from tabulate import tabulate
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import recall_score, precision_score, f1_score, accuracy_score
-import sklearn.metrics as metrics
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    confusion_matrix,
+    f1_score,
+    matthews_corrcoef,
+    roc_auc_score,
+)
+from sklearn.svm import SVC
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LogisticRegression
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.metrics import accuracy_score, f1_score, confusion_matrix, roc_auc_score
+from sklearn.datasets import make_classification
 from sklearn.model_selection import RandomizedSearchCV
 from tabulate import tabulate
-
+import numpy as np
+from metrics import (
+    calculate_metrics,
+    metrics_to_tabular_string,
+    find_best_threshold_for_mcc,
+)
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -53,6 +74,8 @@ input_dir = "./kaggle/input"
 for dirname, _, filenames in os.walk(input_dir):
     for filename in filenames:
         print(os.path.join(dirname, filename))
+
+random_state = 42
 
 loan_original = pd.read_csv(
     os.path.join(
@@ -66,7 +89,7 @@ loan_original[loan_original["loan_id"].duplicated(keep=False) == True].sort_valu
 )
 # remove the loan_id column
 loan_ds = loan_original.drop(["loan_id"], axis=1)
-# replace all spaces in loan_status and education and self_employed columns to
+# replace all spaces in loan_status and education and self_employed columns to ""
 loan_ds["loan_status"] = loan_ds["loan_status"].str.replace(" ", "")
 loan_ds["education"] = loan_ds["education"].str.replace(" ", "")
 loan_ds["self_employed"] = loan_ds["self_employed"].str.replace(" ", "")
@@ -156,14 +179,23 @@ We can see that loan amount does not affects the loan status.
 # show graph of annual income in x, loan status in red(Rejected) and green(accepted)
 # and y will be no_of_dependents
 plt.figure(figsize=(10, 10))
-sns.scatterplot(data=loan_ds, x="income_annum",
-                y="no_of_dependents", hue="loan_status")
+sns.scatterplot(data=loan_ds, x="income_annum", y="no_of_dependents", hue="loan_status")
 plt.title("Annual Income vs No of Dependents")
 plt.xlabel("Annual Income")
 plt.ylabel("No of Dependents")
 plt.show()
 
 We can see that num of dependents is not very affective in predicting load_status
+
+
+# show educated vs not educated loan status
+sns.countplot(data=loan_ds[loan_ds["education"] == 1], x="loan_status")
+plt.title("Loan Status vs Education")
+plt.xlabel("Education(1=Graduate, 0=Not Graduate)")
+plt.ylabel("Loans Approved Count")
+plt.show()
+
+We can see the binary "Education" feature is somewhat informative to predict loan_status.
 
 
 sns.scatterplot(
@@ -223,26 +255,666 @@ was not impressive, as a stupid classifier that always say: Approve!
 would get 90% right.
 
 
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import (
-    accuracy_score,
-    classification_report,
-    confusion_matrix,
-    f1_score,
-    matthews_corrcoef,
-    roc_auc_score,
-)
-from sklearn.model_selection import RandomizedSearchCV
-from tabulate import tabulate
-import numpy as np
-from metrics import (
-    calculate_metrics,
-    metrics_to_tabular_string,
-    find_best_threshold_for_mcc,
+# train LogisticRegression on the dataset
+# Prepare the data
+X = loan_ds.drop("loan_status", axis=1)
+y = loan_ds["loan_status"]
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42
 )
 
-# train LogisticRegression on the dataset
+print(X_train.shape, X_test.shape, y_train.shape, y_test.shape)
+# Standardize the features
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+X_train_scaled.mean(axis=0), X_train_scaled.std(
+    axis=0
+), X_train_scaled.shape  # mean should be 0, std should be 1, X_train_scaled
+
+def train_and_evaluate_basic_models(
+    dataset, target_binary_column, test_size, random_state
+):
+    X = dataset.drop(target_binary_column, axis=1)
+    y = dataset[target_binary_column]
+
+    # Splitting the dataset
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state
+    )
+
+    # Scaling the features
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    # Defining models to train
+    models = {
+        "Logistic Regression": LogisticRegression(random_state=random_state),
+        "Random Forest": RandomForestClassifier(random_state=random_state),
+        "Gradient Boosting": GradientBoostingClassifier(random_state=random_state),
+        "Support Vector Machine": SVC(probability=True, random_state=random_state),
+    }
+
+    results = []
+
+    for model_name, model in models.items():
+        # Training the model
+        model.fit(X_train_scaled, y_train)
+
+        # Getting the probability scores for the positive class
+        if hasattr(model, "predict_proba"):
+            y_scores = model.predict_proba(X_test_scaled)[:, 1]
+        else:  # Use decision function for models like SVM
+            y_scores = model.decision_function(X_test_scaled)
+
+        # # Finding the best threshold for Matthews Correlation Coefficient (MCC)
+        # We cant use this threshold cause can't look at the test data, we can if validation.
+        # best_threshold, _ = find_best_threshold_for_mcc(y_test, y_scores)
+
+        threshold = 0.5
+        # Calculating metrics
+        metrics = calculate_metrics(y_test, y_scores, threshold)
+
+        # Appending results
+        results.append(
+            {
+                "model_name": model_name,
+                "model": model,
+                "test_size": test_size,
+                "random_state": random_state,
+                "metrics": metrics,
+            }
+        )
+
+    return results
+
+
+def plot_basic_models_results(results):
+    # Setting up the style
+    sns.set(style="whitegrid")
+
+    # Plotting Accuracy by Model
+    accuracies = [result["metrics"]["accuracy"] for result in results]
+    model_names = [result["model_name"] for result in results]
+
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x=accuracies, y=model_names, palette="viridis")
+    plt.xlabel("Accuracy")
+    plt.ylabel("Model")
+    plt.title("Accuracy by Model")
+    plt.show()
+
+    # Plotting F1 Score by Model
+    f1_scores = [result["metrics"]["f1_score"] for result in results]
+
+    plt.figure(figsize=(10, 6))
+    sns.barplot(x=f1_scores, y=model_names, palette="magma")
+    plt.xlabel("F1 Score")
+    plt.ylabel("Model")
+    plt.title("F1 Score by Model")
+    plt.show()
+
+    # Plotting Confusion Matrices for Each Model
+    fig, axes = plt.subplots(nrows=1, ncols=len(results), figsize=(20, 5))
+    for i, result in enumerate(results):
+        cm = result["metrics"]["confusion_matrix"]
+        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=axes[i])
+        axes[i].set_title(result["model_name"])
+        axes[i].set_xlabel("Predicted labels")
+        axes[i].set_ylabel("True labels")
+        axes[i].set_xticklabels(["Rejected", "Approved"])
+        axes[i].set_yticklabels(["Rejected", "Approved"])
+
+    plt.tight_layout()
+    plt.show()
+
+
+test_size = 0.2
+target_binary_column = "loan_status"
+basic_models_results = train_and_evaluate_basic_models(
+    loan_ds, target_binary_column, test_size, random_state
+)
+
+plot_basic_models_results(basic_models_results)
+
+We can see those basic models get good results, but they struggle to mitigate the False Positives...
+
+Let's try using pytorch more complex models:
+
+
+import torch
+from torch.utils.data import TensorDataset, DataLoader
+import torch.nn as nn
+import torch.nn.functional as F
+
+default_batch_size = 64
+default_test_size = 0.2
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def prepare_data(
+    loan_ds,
+    test_size=default_test_size,
+    random_state=random_state,
+    batch_size=default_batch_size,
+):
+    # Splitting the dataset into features and target
+    X = loan_ds.drop("loan_status", axis=1).values
+    y = loan_ds["loan_status"].values
+
+    # Splitting into training and testing sets
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=test_size, random_state=random_state
+    )
+
+    # Standardizing the features
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    # Converting to PyTorch tensors
+    X_torch_train_scaled = torch.tensor(X_train_scaled, dtype=torch.float32)
+    X_torch_test_scaled = torch.tensor(X_test_scaled, dtype=torch.float32)
+
+    y_torch_train = torch.tensor(y_train, dtype=torch.float32)
+    y_torch_test = torch.tensor(y_test, dtype=torch.float32)
+
+    # Creating datasets and dataloaders
+    train_dataset = TensorDataset(X_torch_train_scaled, y_torch_train)
+    test_dataset = TensorDataset(X_torch_test_scaled, y_torch_test)
+
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+
+    return X_torch_train_scaled, X_torch_test_scaled, train_loader, test_loader
+
+
+X_torch_train_scaled, X_torch_test_scaled, train_loader, test_loader = prepare_data(
+    loan_ds
+)
+
+
+# supposed to get 0 means and 1 std
+X_train_scaled.mean(axis=0), X_train_scaled.std(axis=0), X_train_scaled.shape
+
+class MLPModel(nn.Module):
+    def __init__(self, input_size, layers_sizes):
+        super(MLPModel, self).__init__()
+        self.layers = nn.ModuleList()
+        for i, layer_size in enumerate(layers_sizes):
+            if i == 0:
+                self.layers.append(nn.Linear(input_size, layer_size))
+            else:
+                self.layers.append(nn.Linear(layers_sizes[i - 1], layer_size))
+            self.layers.append(nn.ReLU(inplace=True))
+        self.layers.append(nn.Linear(layers_sizes[-1], 1))
+
+    def forward(self, x):
+        for layer in self.layers:
+            x = layer(x)
+        return torch.sigmoid(x)
+
+
+class Conv1DModel(nn.Module):
+    def __init__(self, input_size, output_channels=16, kernel_size=3):
+        super(Conv1DModel, self).__init__()
+        self.conv1 = nn.Conv1d(
+            1, output_channels, kernel_size=kernel_size, padding=1)
+        self.fc1 = nn.Linear(
+            output_channels * ((input_size + 2 * 1 - kernel_size) // 1 + 1), 64
+        )
+        self.fc2 = nn.Linear(64, 1)
+
+    def forward(self, x):
+        # Assuming x has shape (batch_size, input_size), we need to unsqueeze to (batch_size, 1, input_size) for Conv1D
+        x = x.unsqueeze(1)
+        x = F.relu(self.conv1(x))
+        # Flatten the output for the dense layer
+        x = x.view(x.size(0), -1)
+        x = F.relu(self.fc1(x))
+        return torch.sigmoid(self.fc2(x))
+
+# create small medium large MLPs
+input_size = X_train_scaled.shape[1]
+print(input_size)
+
+
+def get_names_to_new_models(input_size=input_size):
+    return {
+        "Small MLP": MLPModel(input_size, [32, 16]),
+        "Medium MLP": MLPModel(input_size, [64, 32, 16]),
+        "Large MLP": MLPModel(input_size, [128, 64, 32, 16]),
+        "Conv1D": Conv1DModel(input_size),  # Conv1D model
+    }
+
+
+names_to_models = get_names_to_new_models(input_size)
+
+threshold = 0.5
+
+
+def train_and_evaluate_pytorch_model(
+    threshold, model, model_name, train_loader, test_loader, epochs=100, lr=0.001
+):
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.BCELoss()
+
+    # Training loop
+    model.train()
+    for epoch in tqdm.tqdm(range(epochs), desc=f"Training {model_name}"):
+        for inputs, labels in train_loader:
+            inputs, labels = inputs.to(device), labels.to(device).float()
+            optimizer.zero_grad()
+            outputs = model(inputs).squeeze()
+            loss = criterion(outputs, labels)
+            loss.backward()
+            optimizer.step()
+
+    # Evaluation
+    model.eval()
+    all_labels = []
+    all_outputs = []
+    with torch.no_grad():
+        for inputs, labels in test_loader:
+            inputs = inputs.to(device)
+            outputs = model(inputs).squeeze()
+            all_labels.extend(labels.numpy())
+            all_outputs.extend(outputs.cpu().numpy())
+
+    # Assuming your metrics calculation functions expect numpy arrays
+    all_labels = np.array(all_labels)
+    all_outputs = np.array(all_outputs)
+
+    # Use the provided functions to calculate metrics
+    # Can use it on validation only
+    # best_threshold, _ = find_best_threshold_for_mcc(all_labels, all_outputs)
+
+    metrics = calculate_metrics(all_labels, all_outputs, threshold)
+
+    return {
+        "model": model,
+        "model_name": model_name,
+        "metrics": metrics,
+    }
+    # "model_name": model_name,
+    # "model": model,
+    # "test_size": test_size,
+    # "random_state": random_state,
+    # "metrics": metrics,
+
+# iterate models and train them
+torch_models_results = []
+for model_name, model in names_to_models.items():
+    print(f"Training {model_name}")
+    model = model.to(device)
+    result = train_and_evaluate_pytorch_model(
+        threshold, model, model_name, train_loader, test_loader
+    )
+    torch_models_results.append(result)
+
+torch_models_results
+
+def compare_torch_and_basic_models(torch_results, basic_results):
+    # Extracting metrics
+    torch_accuracies = [result["metrics"]["accuracy"] for result in torch_results]
+    torch_f1_scores = [result["metrics"]["f1_score"] for result in torch_results]
+    basic_accuracies = [result["metrics"]["accuracy"] for result in basic_results]
+    basic_f1_scores = [result["metrics"]["f1_score"] for result in basic_results]
+
+    model_names = [result["model_name"] for result in torch_results + basic_results]
+
+    # Data preparation
+    accuracies = torch_accuracies + basic_accuracies
+    f1_scores = torch_f1_scores + basic_f1_scores
+    labels = ["PyTorch"] * len(torch_results) + ["Basic"] * len(basic_results)
+
+    # Plotting
+    x = np.arange(len(model_names))  # the label locations
+    width = 0.35  # the width of the bars
+
+    fig, ax = plt.subplots(2, 1, figsize=(14, 12))
+
+    # Accuracy Comparison
+    rects1 = ax[0].bar(x - width / 2, accuracies, width, label="Accuracy")
+    ax[0].set_ylabel("Scores")
+    ax[0].set_title("Model Accuracy Comparison")
+    ax[0].set_xticks(x)
+    ax[0].set_xticklabels(model_names)
+    ax[0].legend()
+
+    # F1 Score Comparison
+    rects2 = ax[1].bar(
+        x + width / 2, f1_scores, width, label="F1 Score", color="orange"
+    )
+    ax[1].set_ylabel("Scores")
+    ax[1].set_title("Model F1 Score Comparison")
+    ax[1].set_xticks(x)
+    ax[1].set_xticklabels(model_names)
+    ax[1].legend()
+
+    fig.tight_layout()
+
+    plt.show()
+
+# compare
+compare_torch_and_basic_models(torch_models_results, basic_models_results)
+
+We can see all models get very good results.
+
+
+Now let's change the features, as people are strategic, and see how the models
+get worse in time. Then we will examine approaches to mitigate this fall in models performance (retraining, add bias to model output etc.)
+
+
+loan_ds.iloc[0]
+
+def calc_grads(model, loan_ds, index):
+    row = loan_ds.iloc[index].copy()
+    X = row.drop("loan_status").values
+    X = scaler.transform(X.reshape(1, -1))
+    X = torch.tensor(X, dtype=torch.float32).to(device)
+    y_pred = model(X).item()
+    X.requires_grad = True
+    y_pred = model(X)
+    y_pred.backward()
+    grads = X.grad.cpu().numpy().flatten()
+    return grads, row
+
+def calculate_and_plot_gradients(
+    model, model_name, loan_ds, plot_first_num=5, metrics=None
+):
+    """
+    Calculates gradients for each row in the dataset, plots the gradient magnitudes
+    for the first 'plot_first_num' rows, and finally plots the mean gradient magnitude.
+    Args:
+    - model: The neural network model to use.
+    - model_name: The name of the model.
+    - loan_ds: The dataset.
+    - plot_first_num: Number of initial gradients to plot individually.
+    - metrics: The metrics dictionary for the model, if None we will not show it.
+
+    Returns:
+    - mean_grads: Vector of mean gradients across all features.
+    """
+    print(model_name)
+    loan_ds_copy = loan_ds.copy()
+    features = loan_ds_copy.iloc[0].drop("loan_status").index
+    print(features)
+
+    # calc acc, f1, mcc, roc_auc of the model
+    X = loan_ds_copy.drop("loan_status", axis=1).values
+
+    # Initialize variables
+    rows_to_calc_grad = loan_ds_copy.index
+    all_grads = []
+
+    # Calculate gradients for each row
+    for loop_index, row_to_calc_grad in enumerate(rows_to_calc_grad):
+        grads, row = calc_grads(model, loan_ds_copy, row_to_calc_grad)
+
+        all_grads.append(grads)
+
+        # Plot for the first 'plot_first_num' rows
+        if loop_index < plot_first_num:
+            print(f"Row: {row_to_calc_grad} with features:\n {row}")
+            print(f"And Grads: {grads}")
+            print("\n=================================\n")
+            plt.figure(figsize=(10, 6))
+            sns.barplot(x=grads, y=features, palette="viridis")
+            plt.xlabel("Gradient Abs values")
+            plt.ylabel("Feature")
+            plt.title(
+                f"Feature Importance for model {model_name} by Gradient, of row: {row_to_calc_grad}"
+            )
+            plt.show()
+
+    # Calculate mean of all gradients
+    mean_grads = np.mean(all_grads, axis=0)
+
+    # Plot mean gradients
+    plt.figure(figsize=(10, 6))
+    ax = sns.barplot(x=mean_grads, y=features, palette="viridis")
+    plt.xlabel("Gradient Mean values")
+    plt.ylabel("Feature")
+    title = f"Feature Importance by Gradient *Mean* for model: {model_name}"
+    if metrics is not None:
+        title += " | Metrics: \n"
+        for key, value in metrics.items():
+            if np.isscalar(value):
+                title += f"{key}: {value:.2f}, "
+            else:
+                # makes image huge...
+                # title += f"{key}: {value}, "
+                pass
+    print(f"title is: {title}")
+    plt.title(title)
+
+    # Customize plot appearance
+    ax.set_facecolor("#303030")  # Dark grey background
+    plt.gcf().set_facecolor("#303030")  # Set figure background color
+    ax.xaxis.label.set_color("white")
+    ax.yaxis.label.set_color("white")
+    ax.title.set_color("white")
+    ax.tick_params(axis="x", colors="white")
+    ax.tick_params(axis="y", colors="white")
+    for spine in ax.spines.values():
+        spine.set_edgecolor("white")
+    plt.show()
+
+    return mean_grads
+
+
+model_result_to_explain = torch_models_results[0]
+model_name_to_explain = model_result_to_explain["model_name"]
+model_to_explain = model_result_to_explain["model"]
+metrics_to_explain = model_result_to_explain["metrics"]
+
+mean_grads = calculate_and_plot_gradients(
+    model_to_explain,
+    model_name_to_explain,
+    loan_ds,
+    plot_first_num=5,
+    metrics=metrics_to_explain,
+)
+
+The first 5 plots are the gradients of the small mlp output w.r.t 1 specific row.
+
+The black plot shows the mean gradient vector, which show totally - which features are important for this model when it predicts.
+
+Now Let's see the features importance (mean gradient vector only) of all torch models:
+
+
+for torch_model_result in torch_models_results:
+    model_name_to_explain = torch_model_result["model_name"]
+    model_to_explain = torch_model_result["model"]
+    metrics_to_explain = torch_model_result["metrics"]
+    mean_grads = calculate_and_plot_gradients(
+        model_to_explain,
+        model_name_to_explain,
+        loan_ds,
+        plot_first_num=0,
+        metrics=metrics_to_explain,
+    )
+
+Indeed as we anticipated, the cibil_score is highly informative for all models.
+Explain - the gradient of the score w.r.t this feature when taking mean across all users - is very high,
+means - if we increase the cibil_score we are walking with the gradient direction, which as we know - increase the function(here the function is the score).
+
+In the same way - decreasing the load_term results in higher score, as the mean gradient is negative w.r.t this feature.
+
+We can see another phenomenon - as the model grows larger - it attends to other features too.
+Meaning - the mean gradient vector becomes more uniform(if we look on the absolute values) across features, indicating that the model make use of more features.
+
+We can attribute that to the fact that larger model can catch better the connection between less informative features
+to the loan_status than smaller models, therefore larger models use also low informative features.
+
+
+# function that takes loan_ds, range_strategists_act, features_to_change (it's dict with keys: feature_name, range_to_sample_change), model_to_fool
+# and returns strategists_loan_ds, which is a copy** of loan_ds, and for each row in strategists_loan_ds, if model_to_fool predicts login in range_strategists_act(for example,
+# 0.3-0.5) so iterate over features_to_change for each feature_name, sample random value from range_to_sample_change, and add it to the feature value.
+
+
+def create_strategists_loan_ds(
+    loan_ds_to_change: pd.DataFrame,
+    # tuple of 2 numbers
+    range_strategists_act: Tuple[float, float],
+    features_to_change: Dict[str, Tuple[float, float]],
+    model_to_fool: nn.Module,
+):
+    strategists_loan_ds = loan_ds_to_change.copy()
+    for index, row in strategists_loan_ds.iterrows():
+        X = row.drop("loan_status").values
+        X = scaler.transform(X.reshape(1, -1))
+        X = torch.tensor(X, dtype=torch.float32).to(device)
+        y_pred = model_to_fool(X).item()
+        # add the y_pred as score column
+        strategists_loan_ds.at[index, "score_before_strategy"] = y_pred
+        if range_strategists_act[0] <= y_pred <= range_strategists_act[1]:
+            # set the using_strategy column to True
+            strategists_loan_ds.at[index, "using_strategy"] = True
+            for feature_name, range_to_sample_change in features_to_change.items():
+                value_to_add = np.random.uniform(
+                    range_to_sample_change[0], range_to_sample_change[1]
+                )
+                strategists_loan_ds.at[index, feature_name] += value_to_add
+        else:
+            # set the using_strategy column to False
+            strategists_loan_ds.at[index, "using_strategy"] = False
+    strategists_rows = strategists_loan_ds[
+        strategists_loan_ds["using_strategy"] == True
+    ]
+    return strategists_loan_ds, strategists_rows
+
+
+# 0.3 until threshold in 0.5, to fool the model and skip the threshold
+strategists_act_from = threshold - 0.2
+range_strategists_act = (strategists_act_from, threshold)
+model_to_fool_result = torch_models_results[-1]
+model_to_fool = model_to_fool_result["model"]
+model_to_fool_name = model_to_fool_result["model_name"]
+features_to_change = {
+    "cibil_score": (
+        100,
+        300,
+    ),  # gradient is positive so stategists will add to cibil score
+}
+
+print(
+    f"Creating strategists_loan_ds to fool model: {model_to_fool_name}, features_to_change: {features_to_change}"
+)
+
+strategists_loan_ds, strategists_rows = create_strategists_loan_ds(
+    loan_ds,
+    range_strategists_act,
+    features_to_change,
+    model_to_fool,
+)
+
+loan_ds.iloc[67]
+
+# take first 2 row indexes of strategists_rows and show them, and then show them in loan_ds
+num_strategists_to_show = 2
+strategists_row_indices = strategists_rows.index[:num_strategists_to_show]
+print(f"Strategists rows indices: {strategists_row_indices}")
+strategists_rows.head(num_strategists_to_show)
+
+# show those indices in loan_ds, the true users features:
+loan_ds.loc[strategists_row_indices]
+
+As we can see - the strategists indeed in the range_strategists_act(see score_before column) and change their features to have higher score.
+
+
+# Section 2 - dynamics
+
+
+def make_strategists_loan_ds_trainable(strategists_loan_ds):
+    # remove the:
+    # using_strategy
+    # score_before_strategy
+
+    # create copy:
+    strategists_loan_ds_trainable = strategists_loan_ds.copy()
+    # remove the columns
+    strategists_loan_ds_trainable.drop(
+        ["using_strategy", "score_before_strategy"], axis=1, inplace=True
+    )
+    return strategists_loan_ds_trainable
+
+
+# retrain the model on strategists_loan_ds
+names_to_models_sec2 = get_names_to_new_models(input_size)
+torch_models_results_sec2 = []
+for model_name, model in names_to_models_sec2.items():
+    print(f"Training {model_name}")
+    model = model.to(device)
+    strategists_loan_ds_trainable = make_strategists_loan_ds_trainable(
+        strategists_loan_ds
+    )
+    (
+        X_torch_train_scaled_sec2,
+        X_torch_test_scaled_sec2,
+        train_loader_sec2,
+        test_loader_sec2,
+    ) = prepare_data(strategists_loan_ds_trainable)
+    result = train_and_evaluate_pytorch_model(
+        threshold, model, model_name, train_loader_sec2, test_loader_sec2
+    )
+    torch_models_results_sec2.append(result)
+
+for torch_model_result in torch_models_results_sec2:
+    model_name_to_explain = torch_model_result["model_name"]
+    model_to_explain = torch_model_result["model"]
+    metrics_to_explain = torch_model_result["metrics"]
+    mean_grads = calculate_and_plot_gradients(
+        model_to_explain,
+        model_name_to_explain,
+        strategists_loan_ds_trainable,
+        plot_first_num=0,
+        metrics=metrics_to_explain,
+    )
+
+Indeed as we anticipated. Look at the cibil_score that before using strategies was
+very dominant, see how much it's importance for the models decreased when opposed
+to the results for section 1 when this feature was extremely dominant.
+
+We can see that the strategies, even though we retrained, decreased a bit the
+performance of the models, as now the features are less informative.
+
+We can see it clearly in Large MLP graph, where residential assets value for example is more important feature of the model than the previous cibil_score that ruled.
+
+We also can see that although metrics like mcc\acc ...
+that dependent on the threshold decreased when trained
+on the strategic data - the auc merely decreased in 1-2 models,
+as the auc is independent of threshold, so even though some
+users increases their model score - adjusting new threshold can partially solve this problem, and therefore auc still very high.
+
+
+# TODO note for us - we can make everything dynamic. For example - 100 timestamps, starting with original loan_ds.
+# each timestamp - calc mean_grads, take top k=1 features with highest absolute mean grads(they are impacting the most on the model),
+# then create features_to_change to hold those features, and it will change it uniformly[feature_curr_mean * 0.1, feature_curr_mean * 0.2]
+# for all strategists (choose strategists for example to be 20% of users with highest score below threshold) then create the strategists_loan_ds,
+# then train model on it, then calc mean_grads again, and so on. So that dataset changes over time(dynamics) and in each timestamp we see how the model
+# changes the features importance and how it losses accuracy over time cause everyone becomes strategists.
+# The assumption is that the bank have the true labels long time after the strategy revealed(they dont loans him cause saw real income for example)
+# and then the bank retrain the model to catch future strategists.
+
+# So we can see where the whole system goes to in
+# terms of acc ... andhow the model change its important features.
+
+# Also - make a boundary in the begining, so that each user can't raise
+# it's features by more than 30% of it's original value,
+# and then we can anticipate (if we allow threshold-0.5 to act strategically)
+# that after a lot of timestamps - people merely changes their features
+# and model again back to classify in high acc even though features ruined
+# because everyone increased their features so still the order of users
+# is pretty much the same.
+
+# We can examine what it converges to under different assumptions.
+# If we assume as in previous graph - we told what we expect to see.
+# If no limit on features change - we expect model to have decreased performance
+# over time as always users not approved change their features in grad direction.
 

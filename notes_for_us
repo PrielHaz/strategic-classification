@@ -1,0 +1,46 @@
+
+Notes For Us:
+
+We can do linear classifier w^Tx + b,
+
+	Then each feature i have weight w_i with is the significance of this feature.
+
+Point for strategic:
+
+	Examine if after strategy – moving the threshold can solve the problem (everyone have higher score).
+
+How the explainability vector changes due to strategic? How it changes the strategic features? The model still looks at them
+
+We can show that aucroc maybe remains the same, and that we can solve strategic classification without retraining, and only run aucroc again and pick different threshold. That way – users will change their features to increase their score,
+
+And choosing new threshold will keep bad users out, and good users that are near the edge – will increase their score to pass the new threshold.
+
+How user’s change their feature vector? Like adversarial attacks, we will let them calc the gradient w.r.t. input(their features) and add:
+
+ eps * grad(w.r.t loss, maybe normalized to norm=1) to their features so that the  model will be less correct  on them.
+
+
+
+Then we can show maybe that after they did it (can explore different eps) we can retrain the model (on old data and stratetic data) and It will be immune to those strategies.
+
+
+
+Data:
+
+Loan-Approval-Prediction-Dataset available on internet. Can remove features that are not in all users, or remove users that dont have the features we want.
+
+Maybe some data on loan money from bank, credit score(then after strategic – we can decrease the model score in some(so that mean score before=after) and solve it without retraining, and the metric is for example mean MSE for before and after predictions.) or something in internet.
+
+We can for example choose vector: [revenue per month, how many children, how many loans from banks he returned, how many loans he struggled to return...]
+
+	And then generate data(for example, revenue sampled from N(20K, 10std), etc)
+
+	Normalize the data before enter the net (must... or generate N(0, 1) like it’s already 	normalized or something). And then put a threshold like: label = 1 iff revenue > 20K
+
+	And children <= 1 and loans returned >= 2, it will generate labels, and maybe the strategic is to lie and change the children feature to be real – 2 for example, and then the retrained model will see it and set the new threshold to children <= -1.
+
+
+
+Extras:
+
+Can calc gradients WRT input and make an interpretability vector that highlights to each person, which features it considered more when predicting if to give loan etc.
