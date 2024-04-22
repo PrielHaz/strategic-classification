@@ -54,6 +54,8 @@ def calculate_metrics(y_true, logits, threshold):
     cr = classification_report(
         y_true, y_pred, target_names=["0", "1"], output_dict=True
     )
+    total_positive_predicted = len(y_pred[y_pred == 1])
+    total_negative_predicted = len(y_pred[y_pred == 0])
     metrics = {
         "threshold_used": threshold,
         "auc": auc,
@@ -62,6 +64,8 @@ def calculate_metrics(y_true, logits, threshold):
         "confusion_matrix": cm,
         "mcc": mcc,
         "classification_report": cr,
+        "total_positive_predicted": total_positive_predicted,
+        "total_negative_predicted": total_negative_predicted,
     }
     return metrics
 
